@@ -32,15 +32,21 @@ NO_MAGISK_CHECK=true
 # import functions/variables and setup patching - see for reference (DO NOT REMOVE)
 . tools/ak3-core.sh
 
-ui_print "- [+] Checking kernel image..."
-"$BIN/busybox" sha256sum -cs Image.zst.sha256 || abort "[!] SHA256 mismatch"
-ui_print "- [+] SHA256 OK"
+if [ -f /system/framework/MiuiBooster.jar ]; then
+    abort "[!] HyperOS detected, please use the generic package."
+fi
 
-ui_print "- [+] Unpacking kernel image..."
+ui_print " " "- [+] Starting kernel image flashing..."
+ui_print "- [*] Checking kernel image..."
+"$BIN/busybox" sha256sum -cs Image.zst.sha256 || abort "[!] SHA256 mismatch"
+ui_print "- [*] SHA256 OK"
+
+ui_print "- [*] Unpacking kernel image..."
 "$BIN/zstd" -d -q --no-progress -o "$AKHOME/Image" "$AKHOME/Image.zst" ||
     abort "[!] Failed to decompress kernel image"
-ui_print "- [+] Kernel image unpacked"
+ui_print "- [*] Kernel image unpacked"
 
+ui_print "- [+] Flashing kernel image..."
 # boot install
 split_boot # use split_boot to skip ramdisk unpack, e.g. for devices with init_boot ramdisk
 
@@ -72,28 +78,28 @@ if [ -f $AKHOME/modules/vendor_boot.tar.xz ]; then
     vendor_boot_ramdisk_dir="$AKHOME/_vendor_boot_ramdisk"
 
     mkdir -p "$vendor_boot_ramdisk_dir" ||
-        abort "[!] Failed to create working directory"
+        abort "- [!] Failed to create working directory"
 
-    ui_print "[*] Unpacking ramdisk..."
+    ui_print "- [*] Unpacking ramdisk..."
     (
         cd "$vendor_boot_ramdisk_dir" &&
             "$BIN/busybox" cpio -i -d <"$SPLITIMG/vendor_ramdisk/ramdisk.cpio"
-    ) || abort "[!] Failed to unpack ramdisk.cpio"
+    ) || abort "- [!] Failed to unpack ramdisk.cpio"
 
-    ui_print "[*] Updating ramdisk.cpio modules..."
+    ui_print "- [*] Updating ramdisk.cpio modules..."
     rm -rf "$vendor_boot_ramdisk_dir/lib/modules" ||
-        abort "[!] Failed to remove old modules"
+        abort "- [!] Failed to remove old modules"
     busybox tar -xpf "$AKHOME/modules/vendor_boot.tar.xz" -C "$vendor_boot_ramdisk_dir" ||
-        abort "[!] Failed to extract vendor_boot.tar.xz"
+        abort "- [!] Failed to extract vendor_boot.tar.xz"
 
-    ui_print "[*] Repacking ramdisk.cpio..."
+    ui_print "- [*] Repacking ramdisk.cpio..."
     (
         cd "$vendor_boot_ramdisk_dir" &&
             busybox find . | busybox cpio -o -H newc >"$SPLITIMG/vendor_ramdisk/ramdisk.cpio" 2>/dev/null
     ) || abort "[!] Failed to repack ramdisk.cpio"
 
     rm -rf "$vendor_boot_ramdisk_dir" ||
-        abort "[!] Failed to remove working directory"
+        abort "- [!] Failed to remove working directory"
 fi
 
 ui_print "- [+] Flashing new vendor_boot image..."
