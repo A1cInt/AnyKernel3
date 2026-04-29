@@ -32,6 +32,11 @@ NO_MAGISK_CHECK=true
 # import functions/variables and setup patching - see for reference (DO NOT REMOVE)
 . tools/ak3-core.sh
 
+reset_dir() {
+    rm -rf "$1" || abort "[!] Failed to reset $1"
+    mkdir -p "$1" || abort "[!] Failed to create $1"
+}
+
 if [ -f /system/framework/MiuiBooster.jar ]; then
     abort "[!] HyperOS detected, please use the generic package."
 fi
@@ -60,6 +65,16 @@ fi
 
 rm -f "$AKHOME/Image" || abort "[!] Failed to remove extracted Image"
 
+module_archive="$AKHOME/module.tar.xz"
+module_extract_dir="$AKHOME/_module"
+
+if [ -f "$module_archive" ]; then
+    ui_print " " "- [+] Unpacking module package..."
+    reset_dir "$module_extract_dir"
+    busybox tar -xpf "$module_archive" -C "$module_extract_dir" ||
+        abort "- [!] Failed to extract module.tar.xz"
+fi
+
 # vendor_boot shell variables
 BLOCK=vendor_boot
 IS_SLOT_DEVICE=1
@@ -72,13 +87,12 @@ reset_ak
 # vendor_boot install
 split_boot # use split_boot to skip ramdisk unpack, e.g. for dtb on devices with hdr v4 but no vendor_kernel_boot
 
-if [ -f $AKHOME/modules/vendor_boot.tar.xz ]; then
+if [ -d "$module_extract_dir/vendor_boot" ]; then
     ui_print " " "- [+] Starting vendor_ramdisk modules update..."
 
     vendor_boot_ramdisk_dir="$AKHOME/_vendor_boot_ramdisk"
 
-    mkdir -p "$vendor_boot_ramdisk_dir" ||
-        abort "- [!] Failed to create working directory"
+    reset_dir "$vendor_boot_ramdisk_dir"
 
     ui_print "- [*] Unpacking ramdisk..."
     (
@@ -89,8 +103,10 @@ if [ -f $AKHOME/modules/vendor_boot.tar.xz ]; then
     ui_print "- [*] Updating ramdisk.cpio modules..."
     rm -rf "$vendor_boot_ramdisk_dir/lib/modules" ||
         abort "- [!] Failed to remove old modules"
-    busybox tar -xpf "$AKHOME/modules/vendor_boot.tar.xz" -C "$vendor_boot_ramdisk_dir" ||
-        abort "- [!] Failed to extract vendor_boot.tar.xz"
+    mkdir -p "$vendor_boot_ramdisk_dir/lib" ||
+        abort "- [!] Failed to prepare ramdisk modules directory"
+    cp -a "$module_extract_dir/vendor_boot/lib/." "$vendor_boot_ramdisk_dir/lib/" ||
+        abort "- [!] Failed to copy vendor_boot modules"
 
     ui_print "- [*] Repacking ramdisk.cpio..."
     (
@@ -107,7 +123,7 @@ flash_boot # use flash_boot to skip ramdisk repack, e.g. for dtb on devices with
 ## end vendor_boot install
 
 ## vendor_dlkm install
-if [ -f $AKHOME/modules/vendor_dlkm.tar.xz ]; then
+if [ -d "$module_extract_dir/vendor_dlkm" ]; then
     # reset for vendor_dlkm patching
     reset_ak
 
@@ -115,53 +131,54 @@ if [ -f $AKHOME/modules/vendor_dlkm.tar.xz ]; then
     ui_print " " "- [+] Starting /vendor_dlkm modules update..."
 
     ui_print "- [*] Pulling /vendor_dlkm image from current slot (${SLOT})..."
-    dd if=/dev/block/mapper/vendor_dlkm${SLOT} of=${AKHOME}/vendor_dlkm.img ||
+    dd if=/dev/block/mapper/vendor_dlkm"${SLOT}" of="${AKHOME}"/vendor_dlkm.img ||
         abort "[!] Failed to pull vendor_dlkm${SLOT}.img"
     extract_vendor_dlkm_dir=${AKHOME}/_extract_vendor_dlkm
-    mkdir -p $extract_vendor_dlkm_dir ||
-        abort "[!] Failed to create $extract_vendor_dlkm_dir"
+    reset_dir "$extract_vendor_dlkm_dir"
 
     ui_print "- [*] Unpacking /vendor_dlkm image..."
-    ${BIN}/extract.erofs -i ${AKHOME}/vendor_dlkm.img -x -T8 -o ${extract_vendor_dlkm_dir} &>/dev/null ||
+    "${BIN}"/extract.erofs -i "${AKHOME}"/vendor_dlkm.img -x -T8 -o "${extract_vendor_dlkm_dir}" >/dev/null 2>&1 ||
         abort "[!] Failed to unpack the vendor_dlkm image"
     sync
 
     ui_print "- [*] Updating /vendor_dlkm modules..."
     extract_vendor_dlkm_modules_dir=${extract_vendor_dlkm_dir}/vendor_dlkm/lib/modules
-    rm -f ${extract_vendor_dlkm_modules_dir}/* ||
+    rm -f "${extract_vendor_dlkm_modules_dir}"/* ||
         abort "[!] Failed to remove pre-existing files in ${extract_vendor_dlkm_modules_dir}"
-    rm -f ${extract_vendor_dlkm_dir}/config/vendor_dlkm_{fs_config,file_contexts} ||
+    rm -f "${extract_vendor_dlkm_dir}"/config/vendor_dlkm_fs_config "${extract_vendor_dlkm_dir}"/config/vendor_dlkm_file_contexts ||
         abort "[!] Failed to remove pre-existing fs_config and file_contexts in ${extract_vendor_dlkm_dir}/config"
-    busybox tar -xpf ${AKHOME}/modules/vendor_dlkm.tar.xz -C ${extract_vendor_dlkm_dir}/vendor_dlkm/ ||
-        abort "[!] Failed to extract XZ-compressed tarball"
-    mv ${AKHOME}/config/vendor_dlkm* ${extract_vendor_dlkm_dir}/config/ ||
+    cp -a "$module_extract_dir/vendor_dlkm/lib/modules/." "${extract_vendor_dlkm_modules_dir}/" ||
+        abort "[!] Failed to copy vendor_dlkm modules"
+    mv "${AKHOME}"/config/vendor_dlkm* "${extract_vendor_dlkm_dir}"/config/ ||
         abort "[!] Failed to move fs_config and file_contexts to ${extract_vendor_dlkm_dir}/config"
 
     ui_print "- [*] Repacking /vendor_dlkm image..."
-    rm -f ${AKHOME}/vendor_dlkm.img ||
+    rm -f "${AKHOME}"/vendor_dlkm.img ||
         abort "[!] Failed to remove pre-existing vendor_dlkm.img"
-    ${BIN}/mkfs.erofs \
+    "${BIN}"/mkfs.erofs \
         --mount-point /vendor_dlkm \
-        --fs-config-file ${extract_vendor_dlkm_dir}/config/vendor_dlkm_fs_config \
-        --file-contexts ${extract_vendor_dlkm_dir}/config/vendor_dlkm_file_contexts \
+        --fs-config-file "${extract_vendor_dlkm_dir}"/config/vendor_dlkm_fs_config \
+        --file-contexts "${extract_vendor_dlkm_dir}"/config/vendor_dlkm_file_contexts \
         -z lz4 \
         -b 4096 \
         -C 262144 \
         -T 1230768000 \
-        ${AKHOME}/vendor_dlkm.img ${extract_vendor_dlkm_dir}/vendor_dlkm ||
+        "${AKHOME}"/vendor_dlkm.img "${extract_vendor_dlkm_dir}"/vendor_dlkm ||
         abort "[!] Failed to repack the vendor_dlkm image"
-    rm -rf ${extract_vendor_dlkm_dir} ||
+    rm -rf "${extract_vendor_dlkm_dir}" ||
         abort "[!] Failed to remove working directory"
     unset extract_vendor_dlkm_dir extract_vendor_dlkm_modules_dir
 
-    vendor_dlkm_block_size=$(blockdev --getsize64 /dev/block/mapper/vendor_dlkm${SLOT})
-    if [ $(wc -c <$AKHOME/vendor_dlkm.img) -lt ${vendor_dlkm_block_size} ]; then
+    vendor_dlkm_block_size=$(blockdev --getsize64 /dev/block/mapper/vendor_dlkm"${SLOT}")
+    if [ "$(wc -c <"$AKHOME"/vendor_dlkm.img)" -lt "${vendor_dlkm_block_size}" ]; then
         ui_print "- [*] Generated /vendor_dlkm image size is smaller than the block device..."
         ui_print "- [*] Truncating to fill the erofs image file..."
-        truncate -c -s $vendor_dlkm_block_size $AKHOME/vendor_dlkm.img
+        truncate -c -s "$vendor_dlkm_block_size" "$AKHOME"/vendor_dlkm.img
     fi
 
     ui_print "- [+] Flashing new /vendor_dlkm image..."
     flash_generic vendor_dlkm
 fi
+
+rm -rf "$module_extract_dir"
 ## end vendor_dlkm install
